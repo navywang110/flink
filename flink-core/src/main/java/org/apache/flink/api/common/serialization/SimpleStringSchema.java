@@ -42,6 +42,12 @@ public class SimpleStringSchema implements DeserializationSchema<String>, Serial
 	 * The field is transient because we serialize a different delegate object instead */
 	private transient Charset charset;
 
+	/** Threshold of the number of records for each parallelism. */
+	private final long limit;
+
+	/** The current number of records for each parallelism. */
+	private long cnt = 0;
+
 	/**
 	 * Creates a new SimpleStringSchema that uses "UTF-8" as the encoding.
 	 */
@@ -56,6 +62,19 @@ public class SimpleStringSchema implements DeserializationSchema<String>, Serial
 	 */
 	public SimpleStringSchema(Charset charset) {
 		this.charset = checkNotNull(charset);
+		this.limit = -1;
+	}
+
+	/**
+	 * Create a new SimpleStringSchema that uses the given character set to convert between strings and bytes
+	 * and limit the number of records.
+	 *
+	 * @param charset The charset to use to convert between strings and bytes.
+	 * @param limit Threshold of the number of records for each parallelism.
+	 */
+	public SimpleStringSchema(Charset charset, long limit) {
+		this.charset = checkNotNull(charset);
+		this.limit = limit;
 	}
 
 	/**
@@ -77,6 +96,9 @@ public class SimpleStringSchema implements DeserializationSchema<String>, Serial
 
 	@Override
 	public boolean isEndOfStream(String nextElement) {
+		if (limit > 0) {
+			return ++cnt > limit;
+		}
 		return false;
 	}
 

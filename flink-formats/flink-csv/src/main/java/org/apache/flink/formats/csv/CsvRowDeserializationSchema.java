@@ -73,15 +73,23 @@ public final class CsvRowDeserializationSchema implements DeserializationSchema<
 	/** Flag indicating whether to ignore invalid fields/rows (default: throw an exception). */
 	private final boolean ignoreParseErrors;
 
+	/** Threshold of the number of records for each parallelism. */
+	private final long limit;
+
+	/** The current number of records for each parallelism. */
+	private long cnt = 0;
+
 	private CsvRowDeserializationSchema(
-			RowTypeInfo typeInfo,
-			CsvSchema csvSchema,
-			boolean ignoreParseErrors) {
+		RowTypeInfo typeInfo,
+		CsvSchema csvSchema,
+		boolean ignoreParseErrors,
+		Long limit) {
 		this.typeInfo = typeInfo;
 		this.runtimeConverter = createRowRuntimeConverter(typeInfo, ignoreParseErrors, true);
 		this.csvSchema = csvSchema;
 		this.objectReader = new CsvMapper().readerFor(JsonNode.class).with(csvSchema);
 		this.ignoreParseErrors = ignoreParseErrors;
+		this.limit = limit;
 	}
 
 	/**
@@ -93,6 +101,7 @@ public final class CsvRowDeserializationSchema implements DeserializationSchema<
 		private final RowTypeInfo typeInfo;
 		private CsvSchema csvSchema;
 		private boolean ignoreParseErrors;
+		private long limit = -1;
 
 		/**
 		 * Creates a CSV deserialization schema for the given {@link TypeInformation} with
@@ -146,11 +155,17 @@ public final class CsvRowDeserializationSchema implements DeserializationSchema<
 			return this;
 		}
 
+		public Builder setLimit(long limit) {
+			this.limit = limit;
+			return this;
+		}
+
 		public CsvRowDeserializationSchema build() {
 			return new CsvRowDeserializationSchema(
 				typeInfo,
 				csvSchema,
-				ignoreParseErrors);
+				ignoreParseErrors,
+				limit);
 		}
 	}
 
@@ -169,6 +184,9 @@ public final class CsvRowDeserializationSchema implements DeserializationSchema<
 
 	@Override
 	public boolean isEndOfStream(Row nextElement) {
+		if (limit > 0) {
+			return ++cnt > limit;
+		}
 		return false;
 	}
 

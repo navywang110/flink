@@ -68,6 +68,8 @@ public class Bucket<IN, BucketID> {
 
 	private long partCounter;
 
+	private long records;
+
 	@Nullable
 	private InProgressFileWriter<IN, BucketID> inProgressPart;
 
@@ -162,6 +164,10 @@ public class Bucket<IN, BucketID> {
 		return partCounter;
 	}
 
+	public long getRecords() {
+		return records;
+	}
+
 	boolean isActive() {
 		return inProgressPart != null || !pendingFileRecoverablesForCurrentCheckpoint.isEmpty() || !pendingFileRecoverablesPerCheckpoint.isEmpty();
 	}
@@ -200,6 +206,7 @@ public class Bucket<IN, BucketID> {
 			rollPartFile(currentTime);
 		}
 		inProgressPart.write(element, currentTime);
+		records++;
 	}
 
 	private void rollPartFile(final long currentTime) throws IOException {

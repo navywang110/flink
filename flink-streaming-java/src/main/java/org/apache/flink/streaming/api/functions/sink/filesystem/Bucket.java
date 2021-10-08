@@ -72,6 +72,8 @@ public class Bucket<IN, BucketID> {
 
     private long partCounter;
 
+    private long records;
+
     @Nullable private InProgressFileWriter<IN, BucketID> inProgressPart;
 
     private List<InProgressFileWriter.PendingFileRecoverable>
@@ -174,6 +176,10 @@ public class Bucket<IN, BucketID> {
         return partCounter;
     }
 
+    public long getRecords() {
+        return records;
+    }
+
     boolean isActive() {
         return inProgressPart != null
                 || !pendingFileRecoverablesForCurrentCheckpoint.isEmpty()
@@ -220,6 +226,7 @@ public class Bucket<IN, BucketID> {
             inProgressPart = rollPartFile(currentTime);
         }
         inProgressPart.write(element, currentTime);
+        records++;
     }
 
     private InProgressFileWriter<IN, BucketID> rollPartFile(final long currentTime)

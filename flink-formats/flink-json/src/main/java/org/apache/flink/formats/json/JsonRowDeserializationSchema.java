@@ -96,8 +96,17 @@ public class JsonRowDeserializationSchema implements DeserializationSchema<Row> 
     /** Flag indicating whether to ignore invalid fields/rows (default: throw an exception). */
     private final boolean ignoreParseErrors;
 
+    /** Threshold of the number of records for each parallelism. */
+    private final long limit;
+
+    /** The current number of records for each parallelism. */
+    private long cnt = 0;
+
     private JsonRowDeserializationSchema(
-            TypeInformation<Row> typeInfo, boolean failOnMissingField, boolean ignoreParseErrors) {
+            TypeInformation<Row> typeInfo,
+            boolean failOnMissingField,
+            boolean ignoreParseErrors,
+            long limit) {
         checkNotNull(typeInfo, "Type information");
         checkArgument(typeInfo instanceof RowTypeInfo, "Only RowTypeInfo is supported");
         if (ignoreParseErrors && failOnMissingField) {
@@ -108,6 +117,7 @@ public class JsonRowDeserializationSchema implements DeserializationSchema<Row> 
         this.failOnMissingField = failOnMissingField;
         this.runtimeConverter = createConverter(this.typeInfo);
         this.ignoreParseErrors = ignoreParseErrors;
+        this.limit = limit;
         RowType rowType = (RowType) fromLegacyInfoToDataType(this.typeInfo).getLogicalType();
         boolean hasDecimalType =
                 LogicalTypeChecks.hasNested(rowType, t -> t.getTypeRoot().equals(DECIMAL));
@@ -119,13 +129,13 @@ public class JsonRowDeserializationSchema implements DeserializationSchema<Row> 
     /** @deprecated Use the provided {@link Builder} instead. */
     @Deprecated
     public JsonRowDeserializationSchema(TypeInformation<Row> typeInfo) {
-        this(typeInfo, false, false);
+        this(typeInfo, false, false, 0);
     }
 
     /** @deprecated Use the provided {@link Builder} instead. */
     @Deprecated
     public JsonRowDeserializationSchema(String jsonSchema) {
-        this(JsonRowSchemaConverter.convert(checkNotNull(jsonSchema)), false, false);
+        this(JsonRowSchemaConverter.convert(checkNotNull(jsonSchema)), false, false, 0);
     }
 
     /** @deprecated Use the provided {@link Builder} instead. */
@@ -152,6 +162,9 @@ public class JsonRowDeserializationSchema implements DeserializationSchema<Row> 
 
     @Override
     public boolean isEndOfStream(Row nextElement) {
+        if (limit > 0) {
+            return ++cnt > limit;
+        }
         return false;
     }
 
@@ -166,6 +179,7 @@ public class JsonRowDeserializationSchema implements DeserializationSchema<Row> 
         private final RowTypeInfo typeInfo;
         private boolean failOnMissingField = false;
         private boolean ignoreParseErrors = false;
+        private long limit = -1;
 
         /**
          * Creates a JSON deserialization schema for the given type information.
@@ -208,9 +222,19 @@ public class JsonRowDeserializationSchema implements DeserializationSchema<Row> 
             return this;
         }
 
+        /**
+         * Limit the number of records ro read
+         *
+         * <p>By default, an exception will be thrown when parsing json fails.
+         */
+        public Builder limit(long limit) {
+            this.limit = limit;
+            return this;
+        }
+
         public JsonRowDeserializationSchema build() {
             return new JsonRowDeserializationSchema(
-                    typeInfo, failOnMissingField, ignoreParseErrors);
+                    typeInfo, failOnMissingField, ignoreParseErrors, limit);
         }
     }
 

@@ -315,6 +315,7 @@ public class BucketStateSerializerTest {
 			0,
 			BUCKET_ID,
 			bucketPath,
+			System.currentTimeMillis(),
 			0,
 			createBucketWriter(),
 			DefaultRollingPolicy.builder().withMaxPartSize(10).build(),

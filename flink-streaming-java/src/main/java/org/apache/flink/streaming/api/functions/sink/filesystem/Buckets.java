@@ -210,6 +210,7 @@ public class Buckets<IN, BucketID> {
 			bucket.onSuccessfulCompletionOfCheckpoint(checkpointId);
 
 			if (!bucket.isActive()) {
+				LOG.info("[DEBUG] bucket is inactive: {}", bucket.getBucketId());
 				// We've dealt with all the pending files and the writer for this bucket is not currently open.
 				// Therefore this bucket is currently inactive and we can remove it from our state.
 				activeBucketIt.remove();
@@ -278,7 +279,7 @@ public class Buckets<IN, BucketID> {
 				currentProcessingTime);
 
 		final BucketID bucketId = bucketAssigner.getBucketId(value, bucketerContext);
-		final Bucket<IN, BucketID> bucket = getOrCreateBucketForBucketId(bucketId);
+		final Bucket<IN, BucketID> bucket = getOrCreateBucketForBucketId(bucketId, currentProcessingTime);
 		bucket.write(value, currentProcessingTime);
 
 		// we update the global max counter here because as buckets become inactive and
@@ -289,7 +290,7 @@ public class Buckets<IN, BucketID> {
 		return bucket;
 	}
 
-	private Bucket<IN, BucketID> getOrCreateBucketForBucketId(final BucketID bucketId) throws IOException {
+	private Bucket<IN, BucketID> getOrCreateBucketForBucketId(final BucketID bucketId, final long currentProcessingTime) throws IOException {
 		Bucket<IN, BucketID> bucket = activeBuckets.get(bucketId);
 		if (bucket == null) {
 			final Path bucketPath = assembleBucketPath(bucketId);
@@ -297,6 +298,7 @@ public class Buckets<IN, BucketID> {
 					subtaskIndex,
 					bucketId,
 					bucketPath,
+					currentProcessingTime,
 					maxPartCounter,
 					bucketWriter,
 					rollingPolicy,

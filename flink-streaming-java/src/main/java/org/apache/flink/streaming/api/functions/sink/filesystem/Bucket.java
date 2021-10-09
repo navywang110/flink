@@ -70,6 +70,8 @@ public class Bucket<IN, BucketID> {
 
 	private long records;
 
+	private long createTime;
+
 	@Nullable
 	private InProgressFileWriter<IN, BucketID> inProgressPart;
 
@@ -82,6 +84,7 @@ public class Bucket<IN, BucketID> {
 			final int subtaskIndex,
 			final BucketID bucketId,
 			final Path bucketPath,
+			final long createTime,
 			final long initialPartCounter,
 			final BucketWriter<IN, BucketID> bucketWriter,
 			final RollingPolicy<IN, BucketID> rollingPolicy,
@@ -89,6 +92,7 @@ public class Bucket<IN, BucketID> {
 		this.subtaskIndex = subtaskIndex;
 		this.bucketId = checkNotNull(bucketId);
 		this.bucketPath = checkNotNull(bucketPath);
+		this.createTime = createTime;
 		this.partCounter = initialPartCounter;
 		this.bucketWriter = checkNotNull(bucketWriter);
 		this.rollingPolicy = checkNotNull(rollingPolicy);
@@ -115,6 +119,7 @@ public class Bucket<IN, BucketID> {
 				subtaskIndex,
 				bucketState.getBucketId(),
 				bucketState.getBucketPath(),
+				bucketState.getInProgressFileCreationTime(),
 				initialPartCounter,
 				partFileFactory,
 				rollingPolicy,
@@ -168,7 +173,14 @@ public class Bucket<IN, BucketID> {
 		return records;
 	}
 
+	public long getCreateTime() {
+		return createTime;
+	}
+
 	boolean isActive() {
+//		LOG.info("[DEBUG] {} condition 1: {}", bucketId, inProgressPart != null);
+//		LOG.info("[DEBUG] {} condition 2: {}", bucketId, pendingFileRecoverablesForCurrentCheckpoint);
+//		LOG.info("[DEBUG] {} condition 3: {}", bucketId, pendingFileRecoverablesPerCheckpoint);
 		return inProgressPart != null || !pendingFileRecoverablesForCurrentCheckpoint.isEmpty() || !pendingFileRecoverablesPerCheckpoint.isEmpty();
 	}
 
@@ -231,7 +243,9 @@ public class Bucket<IN, BucketID> {
 		InProgressFileWriter.PendingFileRecoverable pendingFileRecoverable = null;
 		if (inProgressPart != null) {
 			pendingFileRecoverable = inProgressPart.closeForCommit();
+//			LOG.debug("[DEBUG] before add pending file recoverable: {}", pendingFileRecoverablesForCurrentCheckpoint);
 			pendingFileRecoverablesForCurrentCheckpoint.add(pendingFileRecoverable);
+//			LOG.debug("[DEBUG] after add pending file recoverable: {}", pendingFileRecoverablesForCurrentCheckpoint);
 			inProgressPart = null;
 		}
 		return pendingFileRecoverable;
@@ -358,11 +372,12 @@ public class Bucket<IN, BucketID> {
 			final int subtaskIndex,
 			final BucketID bucketId,
 			final Path bucketPath,
+			final long createTime,
 			final long initialPartCounter,
 			final BucketWriter<IN, BucketID> bucketWriter,
 			final RollingPolicy<IN, BucketID> rollingPolicy,
 			final OutputFileConfig outputFileConfig) {
-		return new Bucket<>(subtaskIndex, bucketId, bucketPath, initialPartCounter, bucketWriter, rollingPolicy, outputFileConfig);
+		return new Bucket<>(subtaskIndex, bucketId, bucketPath, createTime, initialPartCounter, bucketWriter, rollingPolicy, outputFileConfig);
 	}
 
 	/**

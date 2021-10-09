@@ -301,7 +301,8 @@ public class Buckets<IN, BucketID> {
         bucketerContext.update(elementTimestamp, currentWatermark, currentProcessingTime);
 
         final BucketID bucketId = bucketAssigner.getBucketId(value, bucketerContext);
-        final Bucket<IN, BucketID> bucket = getOrCreateBucketForBucketId(bucketId);
+        final Bucket<IN, BucketID> bucket =
+                getOrCreateBucketForBucketId(bucketId, currentProcessingTime);
         bucket.write(value, currentProcessingTime);
 
         // we update the global max counter here because as buckets become inactive and
@@ -312,8 +313,8 @@ public class Buckets<IN, BucketID> {
         return bucket;
     }
 
-    private Bucket<IN, BucketID> getOrCreateBucketForBucketId(final BucketID bucketId)
-            throws IOException {
+    private Bucket<IN, BucketID> getOrCreateBucketForBucketId(
+            final BucketID bucketId, final long currentProcessingTime) throws IOException {
         Bucket<IN, BucketID> bucket = activeBuckets.get(bucketId);
         if (bucket == null) {
             final Path bucketPath = assembleBucketPath(bucketId);
@@ -322,6 +323,7 @@ public class Buckets<IN, BucketID> {
                             subtaskIndex,
                             bucketId,
                             bucketPath,
+                            currentProcessingTime,
                             maxPartCounter,
                             bucketWriter,
                             rollingPolicy,

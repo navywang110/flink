@@ -34,6 +34,7 @@ public interface BucketFactory<IN, BucketID> extends Serializable {
             final int subtaskIndex,
             final BucketID bucketId,
             final Path bucketPath,
+            final long createTime,
             final long initialPartCounter,
             final BucketWriter<IN, BucketID> bucketWriter,
             final RollingPolicy<IN, BucketID> rollingPolicy,

@@ -74,6 +74,8 @@ public class Bucket<IN, BucketID> {
 
     private long records;
 
+    private long createTime;
+
     @Nullable private InProgressFileWriter<IN, BucketID> inProgressPart;
 
     private List<InProgressFileWriter.PendingFileRecoverable>
@@ -84,6 +86,7 @@ public class Bucket<IN, BucketID> {
             final int subtaskIndex,
             final BucketID bucketId,
             final Path bucketPath,
+            final long createTime,
             final long initialPartCounter,
             final BucketWriter<IN, BucketID> bucketWriter,
             final RollingPolicy<IN, BucketID> rollingPolicy,
@@ -92,6 +95,7 @@ public class Bucket<IN, BucketID> {
         this.subtaskIndex = subtaskIndex;
         this.bucketId = checkNotNull(bucketId);
         this.bucketPath = checkNotNull(bucketPath);
+        this.createTime = createTime;
         this.partCounter = initialPartCounter;
         this.bucketWriter = checkNotNull(bucketWriter);
         this.rollingPolicy = checkNotNull(rollingPolicy);
@@ -119,6 +123,7 @@ public class Bucket<IN, BucketID> {
                 subtaskIndex,
                 bucketState.getBucketId(),
                 bucketState.getBucketPath(),
+                bucketState.getInProgressFileCreationTime(),
                 initialPartCounter,
                 partFileFactory,
                 rollingPolicy,
@@ -178,6 +183,10 @@ public class Bucket<IN, BucketID> {
 
     public long getRecords() {
         return records;
+    }
+
+    public long getCreateTime() {
+        return createTime;
     }
 
     boolean isActive() {
@@ -429,6 +438,7 @@ public class Bucket<IN, BucketID> {
             final int subtaskIndex,
             final BucketID bucketId,
             final Path bucketPath,
+            final long createTime,
             final long initialPartCounter,
             final BucketWriter<IN, BucketID> bucketWriter,
             final RollingPolicy<IN, BucketID> rollingPolicy,
@@ -438,6 +448,7 @@ public class Bucket<IN, BucketID> {
                 subtaskIndex,
                 bucketId,
                 bucketPath,
+                createTime,
                 initialPartCounter,
                 bucketWriter,
                 rollingPolicy,

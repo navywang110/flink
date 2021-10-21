@@ -164,6 +164,7 @@ public class BucketStateGenerator {
                 0,
                 bucketId,
                 bucketPath,
+                System.currentTimeMillis(),
                 0,
                 createBucketWriter(),
                 DefaultRollingPolicy.builder().withMaxPartSize(10).build(),

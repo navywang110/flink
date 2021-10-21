@@ -380,6 +380,7 @@ public class BucketTest {
                 subtaskIdx,
                 bucketId,
                 bucketPath,
+                System.currentTimeMillis(),
                 initialPartCounter,
                 new RowWiseBucketWriter<>(writer, ENCODER),
                 rollingPolicy,

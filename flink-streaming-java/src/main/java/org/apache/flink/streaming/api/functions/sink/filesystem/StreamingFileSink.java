@@ -40,6 +40,8 @@ import org.apache.flink.util.Preconditions;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.Map;
+import java.util.Properties;
 
 /**
  * Sink that emits its input elements to {@link FileSystem} files within buckets. This is
@@ -124,27 +126,29 @@ public class StreamingFileSink<IN>
 
 	/**
 	 * Creates the builder for a {@code StreamingFileSink} with row-encoding format.
+	 *
 	 * @param basePath the base path where all the buckets are going to be created as sub-directories.
-	 * @param encoder the {@link Encoder} to be used when writing elements in the buckets.
-	 * @param <IN> the type of incoming elements
+	 * @param encoder  the {@link Encoder} to be used when writing elements in the buckets.
+	 * @param <IN>     the type of incoming elements
 	 * @return The builder where the remaining of the configuration parameters for the sink can be configured.
 	 * In order to instantiate the sink, call {@link RowFormatBuilder#build()} after specifying the desired parameters.
 	 */
 	public static <IN> StreamingFileSink.DefaultRowFormatBuilder<IN> forRowFormat(
-			final Path basePath, final Encoder<IN> encoder) {
+		final Path basePath, final Encoder<IN> encoder) {
 		return new DefaultRowFormatBuilder<>(basePath, encoder, new DateTimeBucketAssigner<>());
 	}
 
 	/**
 	 * Creates the builder for a {@link StreamingFileSink} with row-encoding format.
-	 * @param basePath the base path where all the buckets are going to be created as sub-directories.
+	 *
+	 * @param basePath      the base path where all the buckets are going to be created as sub-directories.
 	 * @param writerFactory the {@link BulkWriter.Factory} to be used when writing elements in the buckets.
-	 * @param <IN> the type of incoming elements
+	 * @param <IN>          the type of incoming elements
 	 * @return The builder where the remaining of the configuration parameters for the sink can be configured.
 	 * In order to instantiate the sink, call {@link RowFormatBuilder#build()} after specifying the desired parameters.
 	 */
 	public static <IN> StreamingFileSink.DefaultBulkFormatBuilder<IN> forBulkFormat(
-			final Path basePath, final BulkWriter.Factory<IN> writerFactory) {
+		final Path basePath, final BulkWriter.Factory<IN> writerFactory) {
 		return new StreamingFileSink.DefaultBulkFormatBuilder<>(basePath, writerFactory, new DateTimeBucketAssigner<>());
 	}
 
@@ -188,6 +192,37 @@ public class StreamingFileSink<IN>
 		private BucketFactory<IN, BucketID> bucketFactory;
 
 		private OutputFileConfig outputFileConfig;
+
+		private boolean everyFileNotify;
+		private Map<String, Object> datasetObj;
+		private Properties kafkaProperties;
+
+		public boolean isEveryFileNotify() {
+			return everyFileNotify;
+		}
+
+		public RowFormatBuilder<IN, BucketID, T> setEveryFileNotify(boolean everyFileNotify) {
+			this.everyFileNotify = everyFileNotify;
+			return this;
+		}
+
+		public Map<String, Object> getDatasetObj() {
+			return datasetObj;
+		}
+
+		public RowFormatBuilder<IN, BucketID, T> setDatasetObj(Map<String, Object> datasetObj) {
+			this.datasetObj = datasetObj;
+			return this;
+		}
+
+		public Properties getKafkaProperties() {
+			return kafkaProperties;
+		}
+
+		public RowFormatBuilder<IN, BucketID, T> setKafkaProperties(Properties kafkaProperties) {
+			this.kafkaProperties = kafkaProperties;
+			return this;
+		}
 
 		protected RowFormatBuilder(Path basePath, Encoder<IN> encoder, BucketAssigner<IN, BucketID> bucketAssigner) {
 			this(basePath, encoder, bucketAssigner, DefaultRollingPolicy.builder().build(), DEFAULT_BUCKET_CHECK_INTERVAL, new DefaultBucketFactoryImpl<>(), OutputFileConfig.builder().build());
@@ -234,6 +269,21 @@ public class StreamingFileSink<IN>
 			return self();
 		}
 
+		public T withEveryFileNotify(boolean everyFileNotify) {
+			this.everyFileNotify = everyFileNotify;
+			return self();
+		}
+
+		public T withDatasetObj(Map<String, Object> datasetObj) {
+			this.datasetObj = datasetObj;
+			return self();
+		}
+
+		public T withKafkaProperties(Properties kafkaProperties) {
+			this.kafkaProperties = kafkaProperties;
+			return self();
+		}
+
 		public <ID> StreamingFileSink.RowFormatBuilder<IN, ID, ? extends RowFormatBuilder<IN, ID, ?>> withNewBucketAssignerAndPolicy(final BucketAssigner<IN, ID> assigner, final RollingPolicy<IN, ID> policy) {
 			Preconditions.checkState(bucketFactory.getClass() == DefaultBucketFactoryImpl.class, "newBuilderWithBucketAssignerAndPolicy() cannot be called after specifying a customized bucket factory");
 			return new RowFormatBuilder(basePath, encoder, Preconditions.checkNotNull(assigner), Preconditions.checkNotNull(policy), bucketCheckInterval, new DefaultBucketFactoryImpl<>(), outputFileConfig);
@@ -253,19 +303,28 @@ public class StreamingFileSink<IN>
 		@Internal
 		@Override
 		public Buckets<IN, BucketID> createBuckets(int subtaskIndex) throws IOException {
-			return new Buckets<>(
-					basePath,
-					bucketAssigner,
-					bucketFactory,
-					new RowWiseBucketWriter<>(FileSystem.get(basePath.toUri()).createRecoverableWriter(), encoder),
-					rollingPolicy,
-					subtaskIndex,
-					outputFileConfig);
+			Buckets<IN, BucketID> buckets = new Buckets<>(
+				basePath,
+				bucketAssigner,
+				bucketFactory,
+				new RowWiseBucketWriter<>(FileSystem.get(basePath.toUri()).createRecoverableWriter(), encoder),
+				rollingPolicy,
+				subtaskIndex,
+				outputFileConfig);
+			if (this.everyFileNotify) {
+				buckets.setEveryFileNotify(true);
+				buckets.setDatasetObj(datasetObj);
+				buckets.setKafkaProperties(kafkaProperties);
+			} else {
+				buckets.setEveryFileNotify(false);
+			}
+			return buckets;
 		}
 	}
 
 	/**
 	 * Builder for the vanilla {@link StreamingFileSink} using a row format.
+	 *
 	 * @param <IN> record type
 	 */
 	public static final class DefaultRowFormatBuilder<IN> extends RowFormatBuilder<IN, String, DefaultRowFormatBuilder<IN>> {
@@ -298,19 +357,23 @@ public class StreamingFileSink<IN>
 
 		private OutputFileConfig outputFileConfig;
 
+		private boolean everyFileNotify;
+		private Map<String, Object> datasetObj;
+		private Properties kafkaProperties;
+
 		protected BulkFormatBuilder(Path basePath, BulkWriter.Factory<IN> writerFactory, BucketAssigner<IN, BucketID> assigner) {
 			this(basePath, writerFactory, assigner, OnCheckpointRollingPolicy.build(), DEFAULT_BUCKET_CHECK_INTERVAL,
 				new DefaultBucketFactoryImpl<>(), OutputFileConfig.builder().build());
 		}
 
 		protected BulkFormatBuilder(
-				Path basePath,
-				BulkWriter.Factory<IN> writerFactory,
-				BucketAssigner<IN, BucketID> assigner,
-				CheckpointRollingPolicy<IN, BucketID> policy,
-				long bucketCheckInterval,
-				BucketFactory<IN, BucketID> bucketFactory,
-				OutputFileConfig outputFileConfig) {
+			Path basePath,
+			BulkWriter.Factory<IN> writerFactory,
+			BucketAssigner<IN, BucketID> assigner,
+			CheckpointRollingPolicy<IN, BucketID> policy,
+			long bucketCheckInterval,
+			BucketFactory<IN, BucketID> bucketFactory,
+			OutputFileConfig outputFileConfig) {
 			this.basePath = Preconditions.checkNotNull(basePath);
 			this.writerFactory = writerFactory;
 			this.bucketAssigner = Preconditions.checkNotNull(assigner);
@@ -350,6 +413,21 @@ public class StreamingFileSink<IN>
 			return self();
 		}
 
+		public T withEveryFileNotify(boolean everyFileNotify) {
+			this.everyFileNotify = everyFileNotify;
+			return self();
+		}
+
+		public T withDatasetObj(Map<String, Object> datasetObj) {
+			this.datasetObj = datasetObj;
+			return self();
+		}
+
+		public T withKafkaProperties(Properties kafkaProperties) {
+			this.kafkaProperties = kafkaProperties;
+			return self();
+		}
+
 		public <ID> StreamingFileSink.BulkFormatBuilder<IN, ID, ? extends BulkFormatBuilder<IN, ID, ?>> withNewBucketAssigner(final BucketAssigner<IN, ID> assigner) {
 			Preconditions.checkState(bucketFactory.getClass() == DefaultBucketFactoryImpl.class, "newBuilderWithBucketAssigner() cannot be called after specifying a customized bucket factory");
 			return new BulkFormatBuilder(basePath, writerFactory, Preconditions.checkNotNull(assigner),
@@ -364,14 +442,22 @@ public class StreamingFileSink<IN>
 		@Internal
 		@Override
 		public Buckets<IN, BucketID> createBuckets(int subtaskIndex) throws IOException {
-			return new Buckets<>(
-					basePath,
-					bucketAssigner,
-					bucketFactory,
-					new BulkBucketWriter<>(FileSystem.get(basePath.toUri()).createRecoverableWriter(), writerFactory),
-					rollingPolicy,
-					subtaskIndex,
-					outputFileConfig);
+			Buckets<IN, BucketID> buckets = new Buckets<>(
+				basePath,
+				bucketAssigner,
+				bucketFactory,
+				new BulkBucketWriter<>(FileSystem.get(basePath.toUri()).createRecoverableWriter(), writerFactory),
+				rollingPolicy,
+				subtaskIndex,
+				outputFileConfig);
+			if (this.everyFileNotify) {
+				buckets.setEveryFileNotify(true);
+				buckets.setDatasetObj(datasetObj);
+				buckets.setKafkaProperties(kafkaProperties);
+			} else {
+				buckets.setEveryFileNotify(false);
+			}
+			return buckets;
 		}
 	}
 

@@ -26,15 +26,20 @@ import org.apache.flink.core.io.SimpleVersionedSerialization;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.util.Preconditions;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.kafka.clients.producer.KafkaProducer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Properties;
 
 /**
  * The manager of the different active buckets in the {@link StreamingFileSink}.
@@ -75,6 +80,40 @@ public class Buckets<IN, BucketID> {
 
 	private final OutputFileConfig outputFileConfig;
 
+	private boolean everyFileNotify;
+	private Map<String, Object> datasetObj;
+	private Properties kafkaProperties;
+	public static KafkaProducer<String, String> kafkaProducer = null;
+	public static FileSystem hdfs = null;
+
+	public boolean isEveryFileNotify() {
+		return everyFileNotify;
+	}
+
+	public Buckets<IN, BucketID> setEveryFileNotify(boolean everyFileNotify) {
+		this.everyFileNotify = everyFileNotify;
+		return this;
+	}
+
+	public Map<String, Object> getDatasetObj() {
+		return datasetObj;
+	}
+
+	public Buckets<IN, BucketID> setDatasetObj(Map<String, Object> datasetObj) {
+		this.datasetObj = datasetObj;
+		return this;
+	}
+
+	public Properties getKafkaProperties() {
+		return kafkaProperties;
+	}
+
+	public Buckets<IN, BucketID> setKafkaProperties(Properties kafkaProperties) {
+		this.kafkaProperties = kafkaProperties;
+		return this;
+	}
+
+
 	@Nullable
 	private BucketLifeCycleListener<IN, BucketID> bucketLifeCycleListener;
 
@@ -85,20 +124,20 @@ public class Buckets<IN, BucketID> {
 	/**
 	 * A constructor creating a new empty bucket manager.
 	 *
-	 * @param basePath The base path for our buckets.
+	 * @param basePath       The base path for our buckets.
 	 * @param bucketAssigner The {@link BucketAssigner} provided by the user.
-	 * @param bucketFactory The {@link BucketFactory} to be used to create buckets.
-	 * @param bucketWriter The {@link BucketWriter} to be used when writing data.
-	 * @param rollingPolicy The {@link RollingPolicy} as specified by the user.
+	 * @param bucketFactory  The {@link BucketFactory} to be used to create buckets.
+	 * @param bucketWriter   The {@link BucketWriter} to be used when writing data.
+	 * @param rollingPolicy  The {@link RollingPolicy} as specified by the user.
 	 */
 	Buckets(
-			final Path basePath,
-			final BucketAssigner<IN, BucketID> bucketAssigner,
-			final BucketFactory<IN, BucketID> bucketFactory,
-			final BucketWriter<IN, BucketID> bucketWriter,
-			final RollingPolicy<IN, BucketID> rollingPolicy,
-			final int subtaskIndex,
-			final OutputFileConfig outputFileConfig) {
+		final Path basePath,
+		final BucketAssigner<IN, BucketID> bucketAssigner,
+		final BucketFactory<IN, BucketID> bucketFactory,
+		final BucketWriter<IN, BucketID> bucketWriter,
+		final RollingPolicy<IN, BucketID> rollingPolicy,
+		final int subtaskIndex,
+		final OutputFileConfig outputFileConfig) {
 
 		this.basePath = Preconditions.checkNotNull(basePath);
 		this.bucketAssigner = Preconditions.checkNotNull(bucketAssigner);
@@ -134,10 +173,11 @@ public class Buckets<IN, BucketID> {
 	 *     <li>we resume writing to the previous in-progress file of each bucket, and</li>
 	 *     <li>if we receive multiple states for the same bucket, we merge them.</li>
 	 * </ol>
-	 * @param bucketStates the state holding recovered state about active buckets.
+	 *
+	 * @param bucketStates     the state holding recovered state about active buckets.
 	 * @param partCounterState the state holding the max previously used part counters.
 	 * @throws Exception if anything goes wrong during retrieving the state or restoring/committing of any
-	 * in-progress/pending part files
+	 *                   in-progress/pending part files
 	 */
 	public void initializeState(final ListState<byte[]> bucketStates, final ListState<Long> partCounterState) throws Exception {
 
@@ -150,7 +190,7 @@ public class Buckets<IN, BucketID> {
 
 	private void initializePartCounter(final ListState<Long> partCounterState) throws Exception {
 		long maxCounter = 0L;
-		for (long partCounter: partCounterState.get()) {
+		for (long partCounter : partCounterState.get()) {
 			maxCounter = Math.max(partCounter, maxCounter);
 		}
 		maxPartCounter = maxCounter;
@@ -159,8 +199,8 @@ public class Buckets<IN, BucketID> {
 	private void initializeActiveBuckets(final ListState<byte[]> bucketStates) throws Exception {
 		for (byte[] serializedRecoveredState : bucketStates.get()) {
 			final BucketState<BucketID> recoveredState =
-					SimpleVersionedSerialization.readVersionAndDeSerialize(
-							bucketStateSerializer, serializedRecoveredState);
+				SimpleVersionedSerialization.readVersionAndDeSerialize(
+					bucketStateSerializer, serializedRecoveredState);
 			handleRestoredBucketState(recoveredState);
 		}
 	}
@@ -173,14 +213,14 @@ public class Buckets<IN, BucketID> {
 		}
 
 		final Bucket<IN, BucketID> restoredBucket = bucketFactory
-				.restoreBucket(
-						subtaskIndex,
-						maxPartCounter,
-						bucketWriter,
-						rollingPolicy,
-						recoveredState,
-						outputFileConfig
-				);
+			.restoreBucket(
+				subtaskIndex,
+				maxPartCounter,
+				bucketWriter,
+				rollingPolicy,
+				recoveredState,
+				outputFileConfig
+			);
 
 		updateActiveBucketId(bucketId, restoredBucket);
 	}
@@ -201,13 +241,13 @@ public class Buckets<IN, BucketID> {
 
 	public void commitUpToCheckpoint(final long checkpointId) throws IOException {
 		final Iterator<Map.Entry<BucketID, Bucket<IN, BucketID>>> activeBucketIt =
-				activeBuckets.entrySet().iterator();
+			activeBuckets.entrySet().iterator();
 
-		LOG.info("Subtask {} received completion notification for checkpoint with id={}.", subtaskIndex, checkpointId);
-
+//		LOG.info("Subtask {} received completion notification for checkpoint with id={}.", subtaskIndex, checkpointId);
+//		LOG.info("activeBucket.size {} and buckets {}", activeBuckets.size(), Arrays.toString(activeBuckets.keySet().toArray()));
 		while (activeBucketIt.hasNext()) {
 			final Bucket<IN, BucketID> bucket = activeBucketIt.next().getValue();
-			bucket.onSuccessfulCompletionOfCheckpoint(checkpointId);
+			bucket.onSuccessfulCompletionOfCheckpoint(checkpointId, getKafkaProducer(), getDatasetObj(), getKafkaProperties(), initHdfsClient());
 
 			if (!bucket.isActive()) {
 				LOG.info("[DEBUG] bucket is inactive: {}", bucket.getBucketId());
@@ -219,17 +259,68 @@ public class Buckets<IN, BucketID> {
 		}
 	}
 
+	public KafkaProducer<String, String> getKafkaProducer() {
+		if (!this.isEveryFileNotify()) {
+			return null;
+		}
+
+		if (Buckets.kafkaProducer == null) {
+			Properties props = new Properties();
+			Iterator<Map.Entry<Object, Object>> iterator = kafkaProperties.entrySet().iterator();
+			while (iterator.hasNext()) {
+				Map.Entry<Object, Object> next = iterator.next();
+				Object key = next.getKey();
+				Object value = next.getValue();
+				if (!"topic".equals(key)) {
+					props.put(key, value);
+				}
+			}
+			KafkaProducer kafkaProducer = new KafkaProducer<String, String>(props);
+			Buckets.kafkaProducer = kafkaProducer;
+
+			LOG.info("KafkaConifg and DatasetObj : " + Arrays.toString(kafkaProperties.keySet().toArray()) + "; " + Arrays.toString(kafkaProperties.values().toArray()) + " ; " +
+				Arrays.toString(datasetObj.keySet().toArray()) + "; " + Arrays.toString(datasetObj.values().toArray()));
+		}
+		return Buckets.kafkaProducer;
+	}
+
+	public FileSystem initHdfsClient() {
+		if (!this.isEveryFileNotify()) {
+			return null;
+		}
+
+		if (Buckets.hdfs == null) {
+			try {
+				Configuration hadoopConfig = new Configuration();
+				if ("kerberos".equals(hadoopConfig.get("hadoop.security.authentication")) && hadoopConfig.getBoolean("hadoop.security.authorization", false)) {
+					hadoopConfig.set("hadoop.security.authorization", "true");
+					hadoopConfig.set("hadoop.security.authentication", "Kerberos");
+//					hadoopConfig.set("java.security.krb5.conf", krb5ConfigFile);
+//					hadoopConfig.set("dfs.namenode.kerberos.principal", kerberosPrincipal);
+//					hadoopConfig.set("dfs.namenode.keytab.file", kerberosKeytab);
+//					hadoopConfig.set("useLocalFile", "true");
+//					hadoopConfig.set("principalFile", kerberosKeytab);
+				}
+				hdfs = FileSystem.get(hadoopConfig);
+			} catch (IOException e) {
+				LOG.error("init hdfs error: ", e);
+			}
+
+		}
+		return Buckets.hdfs;
+	}
+
 	public void snapshotState(
-			final long checkpointId,
-			final ListState<byte[]> bucketStatesContainer,
-			final ListState<Long> partCounterStateContainer) throws Exception {
+		final long checkpointId,
+		final ListState<byte[]> bucketStatesContainer,
+		final ListState<Long> partCounterStateContainer) throws Exception {
 
 		Preconditions.checkState(
 			bucketWriter != null && bucketStateSerializer != null,
-				"sink has not been initialized");
+			"sink has not been initialized");
 
 		LOG.info("Subtask {} checkpointing for checkpoint with id={} (max part counter={}).",
-				subtaskIndex, checkpointId, maxPartCounter);
+			subtaskIndex, checkpointId, maxPartCounter);
 
 		bucketStatesContainer.clear();
 		partCounterStateContainer.clear();
@@ -239,14 +330,14 @@ public class Buckets<IN, BucketID> {
 	}
 
 	private void snapshotActiveBuckets(
-			final long checkpointId,
-			final ListState<byte[]> bucketStatesContainer) throws Exception {
+		final long checkpointId,
+		final ListState<byte[]> bucketStatesContainer) throws Exception {
 
 		for (Bucket<IN, BucketID> bucket : activeBuckets.values()) {
 			final BucketState<BucketID> bucketState = bucket.onReceptionOfCheckpoint(checkpointId);
 
 			final byte[] serializedBucketState = SimpleVersionedSerialization
-					.writeVersionAndSerialize(bucketStateSerializer, bucketState);
+				.writeVersionAndSerialize(bucketStateSerializer, bucketState);
 
 			bucketStatesContainer.add(serializedBucketState);
 
@@ -258,25 +349,25 @@ public class Buckets<IN, BucketID> {
 
 	@VisibleForTesting
 	public Bucket<IN, BucketID> onElement(
-			final IN value,
-			final SinkFunction.Context context) throws Exception {
+		final IN value,
+		final SinkFunction.Context context) throws Exception {
 		return onElement(
-				value,
-				context.currentProcessingTime(),
-				context.timestamp(),
-				context.currentWatermark());
+			value,
+			context.currentProcessingTime(),
+			context.timestamp(),
+			context.currentWatermark());
 	}
 
 	public Bucket<IN, BucketID> onElement(
-			final IN value,
-			final long currentProcessingTime,
-			@Nullable final Long elementTimestamp,
-			final long currentWatermark) throws Exception {
+		final IN value,
+		final long currentProcessingTime,
+		@Nullable final Long elementTimestamp,
+		final long currentWatermark) throws Exception {
 		// setting the values in the bucketer context
 		bucketerContext.update(
-				elementTimestamp,
-				currentWatermark,
-				currentProcessingTime);
+			elementTimestamp,
+			currentWatermark,
+			currentProcessingTime);
 
 		final BucketID bucketId = bucketAssigner.getBucketId(value, bucketerContext);
 		final Bucket<IN, BucketID> bucket = getOrCreateBucketForBucketId(bucketId, currentProcessingTime);
@@ -295,14 +386,14 @@ public class Buckets<IN, BucketID> {
 		if (bucket == null) {
 			final Path bucketPath = assembleBucketPath(bucketId);
 			bucket = bucketFactory.getNewBucket(
-					subtaskIndex,
-					bucketId,
-					bucketPath,
-					currentProcessingTime,
-					maxPartCounter,
-					bucketWriter,
-					rollingPolicy,
-					outputFileConfig);
+				subtaskIndex,
+				bucketId,
+				bucketPath,
+				currentProcessingTime,
+				maxPartCounter,
+				bucketWriter,
+				rollingPolicy,
+				outputFileConfig);
 			activeBuckets.put(bucketId, bucket);
 			notifyBucketCreate(bucket);
 		}

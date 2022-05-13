@@ -35,6 +35,8 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.util.VersionInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -63,6 +65,8 @@ class HadoopRecoverableFsDataOutputStream extends RecoverableFsDataOutputStream 
 	private final Path tempFile;
 
 	private final FSDataOutputStream out;
+
+	private static final Logger LOG = LoggerFactory.getLogger(HadoopRecoverableFsDataOutputStream.class);
 
 	HadoopRecoverableFsDataOutputStream(
 			FileSystem fs,
@@ -257,6 +261,7 @@ class HadoopRecoverableFsDataOutputStream extends RecoverableFsDataOutputStream 
 
 			try {
 				fs.rename(src, dest);
+//				LOG.info("rename temp to final {}-->{}", src, dest);
 			}
 			catch (IOException e) {
 				throw new IOException("Committing file by rename failed: " + src + " to " + dest, e);
@@ -290,6 +295,7 @@ class HadoopRecoverableFsDataOutputStream extends RecoverableFsDataOutputStream 
 				// rename to final location (if it exists, overwrite it)
 				try {
 					fs.rename(src, dest);
+//					LOG.info("in recovery rename temp to final {}-->{}", src, dest);
 				}
 				catch (IOException e) {
 					throw new IOException("Committing file by rename failed: " + src + " to " + dest, e);

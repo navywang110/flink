@@ -72,7 +72,7 @@ public class BucketTest {
 		final BucketState<String> state = bucketUnderTest.onReceptionOfCheckpoint(0L);
 		assertThat(state, hasActiveInProgressFile());
 
-		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(0L);
+		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(0L, null, null, null, null);
 		assertThat(recoverableWriter, hasCalledDiscard(0)); // it did not discard as this is still valid.
 	}
 
@@ -90,12 +90,12 @@ public class BucketTest {
 		final BucketState<String> state = bucketUnderTest.onReceptionOfCheckpoint(0L);
 		assertThat(state, hasActiveInProgressFile());
 
-		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(0L);
+		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(0L, null, null, null, null);
 
 		bucketUnderTest.onReceptionOfCheckpoint(1L);
 		bucketUnderTest.onReceptionOfCheckpoint(2L);
 
-		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(2L);
+		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(2L, null, null, null, null);
 		assertThat(recoverableWriter, hasCalledDiscard(2)); // that is for checkpoints 0 and 1
 	}
 
@@ -114,7 +114,7 @@ public class BucketTest {
 		bucketUnderTest.onReceptionOfCheckpoint(1L);
 		bucketUnderTest.onReceptionOfCheckpoint(2L);
 
-		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(2L);
+		bucketUnderTest.onSuccessfulCompletionOfCheckpoint(2L, null, null, null, null);
 		assertThat(recoverableWriter, hasCalledDiscard(0)); // we have no in-progress file.
 	}
 

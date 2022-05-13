@@ -21,19 +21,30 @@ package org.apache.flink.streaming.api.functions.sink.filesystem;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.core.fs.RecoverableWriter;
+import org.apache.flink.runtime.fs.hdfs.HadoopFsRecoverable;
 
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.LineNumberReader;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.TreeMap;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -72,23 +83,46 @@ public class Bucket<IN, BucketID> {
 
 	private long createTime;
 
+	public boolean isEveryFileNotify() {
+		return everyFileNotify;
+	}
+
+	public Bucket<IN, BucketID> setEveryFileNotify(boolean everyFileNotify) {
+		this.everyFileNotify = everyFileNotify;
+		return this;
+	}
+
+	public Map<String, Object> getDatasetConf() {
+		return datasetConf;
+	}
+
+	public Bucket<IN, BucketID> setDatasetConf(Map<String, Object> datasetConf) {
+		this.datasetConf = datasetConf;
+		return this;
+	}
+
+	private boolean everyFileNotify;
+	private Map<String, Object> datasetConf;
+
 	@Nullable
 	private InProgressFileWriter<IN, BucketID> inProgressPart;
 
 	private List<InProgressFileWriter.PendingFileRecoverable> pendingFileRecoverablesForCurrentCheckpoint;
 
+	private SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
 	/**
 	 * Constructor to create a new empty bucket.
 	 */
 	private Bucket(
-			final int subtaskIndex,
-			final BucketID bucketId,
-			final Path bucketPath,
-			final long createTime,
-			final long initialPartCounter,
-			final BucketWriter<IN, BucketID> bucketWriter,
-			final RollingPolicy<IN, BucketID> rollingPolicy,
-			final OutputFileConfig outputFileConfig) {
+		final int subtaskIndex,
+		final BucketID bucketId,
+		final Path bucketPath,
+		final long createTime,
+		final long initialPartCounter,
+		final BucketWriter<IN, BucketID> bucketWriter,
+		final RollingPolicy<IN, BucketID> rollingPolicy,
+		final OutputFileConfig outputFileConfig) {
 		this.subtaskIndex = subtaskIndex;
 		this.bucketId = checkNotNull(bucketId);
 		this.bucketPath = checkNotNull(bucketPath);
@@ -108,22 +142,22 @@ public class Bucket<IN, BucketID> {
 	 * Constructor to restore a bucket from checkpointed state.
 	 */
 	private Bucket(
-			final int subtaskIndex,
-			final long initialPartCounter,
-			final BucketWriter<IN, BucketID> partFileFactory,
-			final RollingPolicy<IN, BucketID> rollingPolicy,
-			final BucketState<BucketID> bucketState,
-			final OutputFileConfig outputFileConfig) throws IOException {
+		final int subtaskIndex,
+		final long initialPartCounter,
+		final BucketWriter<IN, BucketID> partFileFactory,
+		final RollingPolicy<IN, BucketID> rollingPolicy,
+		final BucketState<BucketID> bucketState,
+		final OutputFileConfig outputFileConfig) throws IOException {
 
 		this(
-				subtaskIndex,
-				bucketState.getBucketId(),
-				bucketState.getBucketPath(),
-				bucketState.getInProgressFileCreationTime(),
-				initialPartCounter,
-				partFileFactory,
-				rollingPolicy,
-				outputFileConfig);
+			subtaskIndex,
+			bucketState.getBucketId(),
+			bucketState.getBucketPath(),
+			bucketState.getInProgressFileCreationTime(),
+			initialPartCounter,
+			partFileFactory,
+			rollingPolicy,
+			outputFileConfig);
 
 		restoreInProgressFile(bucketState);
 		commitRecoveredPendingFiles(bucketState);
@@ -139,7 +173,7 @@ public class Bucket<IN, BucketID> {
 
 		if (bucketWriter.getProperties().supportsResume()) {
 			inProgressPart = bucketWriter.resumeInProgressFileFrom(
-					bucketId, inProgressFileRecoverable, state.getInProgressFileCreationTime());
+				bucketId, inProgressFileRecoverable, state.getInProgressFileCreationTime());
 		} else {
 			// if the writer does not support resume, then we close the
 			// in-progress part and commit it, as done in the case of pending files.
@@ -150,8 +184,8 @@ public class Bucket<IN, BucketID> {
 	private void commitRecoveredPendingFiles(final BucketState<BucketID> state) throws IOException {
 
 		// we commit pending files for checkpoints that precess the last successful one, from which we are recovering
-		for (List<InProgressFileWriter.PendingFileRecoverable> pendingFileRecoverables: state.getPendingFileRecoverablesPerCheckpoint().values()) {
-			for (InProgressFileWriter.PendingFileRecoverable pendingFileRecoverable: pendingFileRecoverables) {
+		for (List<InProgressFileWriter.PendingFileRecoverable> pendingFileRecoverables : state.getPendingFileRecoverablesPerCheckpoint().values()) {
+			for (InProgressFileWriter.PendingFileRecoverable pendingFileRecoverable : pendingFileRecoverables) {
 				bucketWriter.recoverPendingFile(pendingFileRecoverable).commitAfterRecovery();
 			}
 		}
@@ -178,9 +212,9 @@ public class Bucket<IN, BucketID> {
 	}
 
 	boolean isActive() {
-//		LOG.info("[DEBUG] {} condition 1: {}", bucketId, inProgressPart != null);
-//		LOG.info("[DEBUG] {} condition 2: {}", bucketId, pendingFileRecoverablesForCurrentCheckpoint);
-//		LOG.info("[DEBUG] {} condition 3: {}", bucketId, pendingFileRecoverablesPerCheckpoint);
+		LOG.info("[DEBUG] {} condition 1: {}", bucketId, inProgressPart != null);
+		LOG.info("[DEBUG] {} condition 2: {}", bucketId, pendingFileRecoverablesForCurrentCheckpoint);
+		LOG.info("[DEBUG] {} condition 3: {}", bucketId, pendingFileRecoverablesPerCheckpoint);
 		return inProgressPart != null || !pendingFileRecoverablesForCurrentCheckpoint.isEmpty() || !pendingFileRecoverablesPerCheckpoint.isEmpty();
 	}
 
@@ -212,7 +246,7 @@ public class Bucket<IN, BucketID> {
 
 			if (LOG.isDebugEnabled()) {
 				LOG.debug("Subtask {} closing in-progress part file for bucket id={} due to element {}.",
-						subtaskIndex, bucketId, element);
+					subtaskIndex, bucketId, element);
 			}
 
 			rollPartFile(currentTime);
@@ -229,7 +263,7 @@ public class Bucket<IN, BucketID> {
 
 		if (LOG.isDebugEnabled()) {
 			LOG.debug("Subtask {} opening new part file \"{}\" for bucket id={}.",
-					subtaskIndex, partFilePath.getName(), bucketId);
+				subtaskIndex, partFilePath.getName(), bucketId);
 		}
 
 		partCounter++;
@@ -286,18 +320,36 @@ public class Bucket<IN, BucketID> {
 		}
 	}
 
-	void onSuccessfulCompletionOfCheckpoint(long checkpointId) throws IOException {
+	void onSuccessfulCompletionOfCheckpoint(long checkpointId, KafkaProducer<String, String> kafkaProducer,
+											Map<String, Object> datasetObj, Properties kafkaProperties, FileSystem hdfs) throws IOException {
 		checkNotNull(bucketWriter);
 
 		Iterator<Map.Entry<Long, List<InProgressFileWriter.PendingFileRecoverable>>> it =
-				pendingFileRecoverablesPerCheckpoint.headMap(checkpointId, true)
-						.entrySet().iterator();
+			pendingFileRecoverablesPerCheckpoint.headMap(checkpointId, true)
+				.entrySet().iterator();
 
 		while (it.hasNext()) {
 			Map.Entry<Long, List<InProgressFileWriter.PendingFileRecoverable>> entry = it.next();
 
 			for (InProgressFileWriter.PendingFileRecoverable pendingFileRecoverable : entry.getValue()) {
-				bucketWriter.recoverPendingFile(pendingFileRecoverable).commit();
+				org.apache.hadoop.fs.Path targetFile = null;
+				BucketWriter.PendingFile pendingFile = bucketWriter.recoverPendingFile(pendingFileRecoverable);
+				if (kafkaProducer != null) {
+					if (pendingFile instanceof OutputStreamBasedPartFileWriter.OutputStreamBasedPendingFile) {
+						OutputStreamBasedPartFileWriter.OutputStreamBasedPendingFile penFile = (OutputStreamBasedPartFileWriter.OutputStreamBasedPendingFile) pendingFile;
+						RecoverableWriter.CommitRecoverable recoverable = penFile.getCommitter().getRecoverable();
+						if (recoverable instanceof HadoopFsRecoverable) {
+							HadoopFsRecoverable recoverable1 = (HadoopFsRecoverable) recoverable;
+							targetFile = recoverable1.targetFile();
+//							LOG.info("targetFile info : " + targetFile.getName() + " ; " + targetFile.toUri().getPath() + " ; " + targetFile.toUri().toString() + " ; " + targetFile.toString());
+						}
+					}
+				}
+				pendingFile.commit();
+				if (kafkaProducer != null && targetFile != null) {
+					sendKafkaMessage(kafkaProducer, datasetObj, targetFile, kafkaProperties.get("topic").toString(), hdfs);
+				}
+//				LOG.info("checkpointId {}, pendingFile {}", checkpointId, pendingFile);
 			}
 			it.remove();
 		}
@@ -305,10 +357,101 @@ public class Bucket<IN, BucketID> {
 		cleanupInProgressFileRecoverables(checkpointId);
 	}
 
+	private void sendKafkaMessage(KafkaProducer kafkaProducer, Map<String, Object> datasetObj, org.apache.hadoop.fs.Path targetFile, String topic, FileSystem hdfs) {
+		String oldPath = datasetObj.get("path").toString();
+		if (!oldPath.endsWith("/")) {
+			oldPath = oldPath + "/";
+		}
+		String fullPath = targetFile.toUri().getPath();
+		oldPath = oldPath.substring(oldPath.indexOf(fullPath.substring(0, fullPath.indexOf("/", 1))));
+		int idx = fullPath.indexOf(oldPath);
+		String sliceTime = fullPath.substring(idx + oldPath.length()).split("/")[0];
+		if (!sliceTime.contains("-") && !sliceTime.contains(":")) {
+			if (sliceTime.length() >= 14) {//yyyyMMddHHmmss
+				sliceTime = sliceTime.substring(0, 4) + "-" + sliceTime.substring(4, 6) + "-" + sliceTime.substring(6, 8) + " " + sliceTime.substring(8, 10) + ":" + sliceTime.substring(10, 12) + ":" + sliceTime.substring(12, 14);
+			} else if (sliceTime.length() >= 12) {//yyyyMMddHHmm
+				sliceTime = sliceTime.substring(0, 4) + "-" + sliceTime.substring(4, 6) + "-" + sliceTime.substring(6, 8) + " " + sliceTime.substring(8, 10) + ":" + sliceTime.substring(10, 12) + ":00";
+			} else if (sliceTime.length() >= 10) {//yyyyMMddHH
+				sliceTime = sliceTime.substring(0, 4) + "-" + sliceTime.substring(4, 6) + "-" + sliceTime.substring(6, 8) + " " + sliceTime.substring(8, 10) + ":00:00";
+			} else if (sliceTime.length() >= 8) {//yyyyMMdd
+				sliceTime = sliceTime.substring(0, 4) + "-" + sliceTime.substring(4, 6) + "-" + sliceTime.substring(6, 8);
+			} else if (sliceTime.length() >= 6) {//yyyyMM
+				sliceTime = sliceTime.substring(0, 4) + "-" + sliceTime.substring(4, 6);
+			}
+		}
+		Long fileSourceID = Long.valueOf(datasetObj.get("schemaId").toString());
+		String sliceType = datasetObj.get("sliceType").toString();
+//		LOG.info("oldPath {}, fullPath {}, idx {}, sliceTIme {}, fileSourceID {}, sliceType {}", oldPath, fullPath, idx, sliceTime, fileSourceID, sliceType);
+
+		String fullName = fullPath.substring(idx);
+		String fileName = datasetObj.get("schemaName").toString();
+		String fileType = datasetObj.get("format").toString();
+		String fieldSeparator = "";
+		String fieldWrapper = "";
+		String compressType = "";
+		if ("parquet".equals(fileType)) {
+			compressType = "snappy";
+		} else if ("csv".equals(fileType)) {
+			fieldSeparator = datasetObj.get("separator").toString();
+			fieldWrapper = datasetObj.get("quoteChar").toString();
+		} else if ("json".equals(fileType)) {
+		}
+		String code = "utf-8";
+		String clusterName = datasetObj.get("clusterId") == null ? null : datasetObj.get("clusterId").toString();
+		long fileSize = 0L;
+		long rowNumber = 0L;
+		FSDataInputStream fsin = null;
+		LineNumberReader lnr = null;
+		try {
+			fileSize = hdfs.getContentSummary(new org.apache.hadoop.fs.Path(fullName)).getLength();
+			fsin = hdfs.open(new org.apache.hadoop.fs.Path(fullName));
+			lnr = new LineNumberReader(new InputStreamReader(fsin));
+			while (lnr.readLine() != null) {
+				rowNumber++;
+			}
+		} catch (Exception e) {
+			LOG.error("read file error: {}", fullName, e);
+		} finally {
+			try {
+				if (fsin != null) {
+					fsin.close();
+				}
+				if (lnr != null) {
+					lnr.close();
+				}
+			} catch (Exception ex) {
+				LOG.error("close inputStream error: ", ex);
+			}
+		}
+
+		StringBuffer xmlBuf = new StringBuffer();
+		xmlBuf.append("<root><ip>0</ip>");
+		xmlBuf.append("<fileSourceID>" + fileSourceID + "</fileSourceID>");
+		xmlBuf.append("<fullName>" + fullName + "</fullName>");
+		xmlBuf.append("<fileName>" + fileName + "</fileName>");
+		xmlBuf.append("<sliceType>" + sliceType + "</sliceType>");
+		xmlBuf.append("<sliceTime>" + sliceTime + "</sliceTime>");
+		xmlBuf.append("<createTime>" + simpleDateFormat.format(new Date()) + "</createTime>");
+		xmlBuf.append("<rowNumber>" + rowNumber + "</rowNumber>");
+		xmlBuf.append("<fieldSeparator>" + fieldSeparator + "</fieldSeparator>");
+		xmlBuf.append("<fileSize>" + fileSize + "</fileSize>");
+		xmlBuf.append("<compressType>" + compressType + "</compressType>");
+		xmlBuf.append("<fileType>" + fileType + "</fileType>");
+		xmlBuf.append("<fieldWrapper>" + fieldWrapper + "</fieldWrapper>");
+		xmlBuf.append("<code>" + code + "</code>");
+		xmlBuf.append("<clusterName>" + clusterName + "</clusterName>");
+		xmlBuf.append("</root>");
+
+		ProducerRecord producerRecord = new ProducerRecord<String, String>(topic, fullName, xmlBuf.toString());
+		LOG.info("sendMsgToKafka: " + xmlBuf.toString());
+
+		kafkaProducer.send(producerRecord);
+	}
+
 	private void cleanupInProgressFileRecoverables(long checkpointId) throws IOException {
 		Iterator<Map.Entry<Long, InProgressFileWriter.InProgressFileRecoverable>> it =
-				inProgressFileRecoverablesPerCheckpoint.headMap(checkpointId, false)
-						.entrySet().iterator();
+			inProgressFileRecoverablesPerCheckpoint.headMap(checkpointId, false)
+				.entrySet().iterator();
 
 		while (it.hasNext()) {
 			final InProgressFileWriter.InProgressFileRecoverable inProgressFileRecoverable = it.next().getValue();
@@ -330,7 +473,7 @@ public class Bucket<IN, BucketID> {
 			if (LOG.isDebugEnabled()) {
 				LOG.debug("Subtask {} closing in-progress part file for bucket id={} due to processing time rolling policy " +
 						"(in-progress file created @ {}, last updated @ {} and current time is {}).",
-						subtaskIndex, bucketId, inProgressPart.getCreationTime(), inProgressPart.getLastUpdateTime(), timestamp);
+					subtaskIndex, bucketId, inProgressPart.getCreationTime(), inProgressPart.getLastUpdateTime(), timestamp);
 			}
 			closePartFile();
 		}
@@ -358,46 +501,48 @@ public class Bucket<IN, BucketID> {
 
 	/**
 	 * Creates a new empty {@code Bucket}.
-	 * @param subtaskIndex the index of the subtask creating the bucket.
-	 * @param bucketId the identifier of the bucket, as returned by the {@link BucketAssigner}.
-	 * @param bucketPath the path to where the part files for the bucket will be written to.
+	 *
+	 * @param subtaskIndex       the index of the subtask creating the bucket.
+	 * @param bucketId           the identifier of the bucket, as returned by the {@link BucketAssigner}.
+	 * @param bucketPath         the path to where the part files for the bucket will be written to.
 	 * @param initialPartCounter the initial counter for the part files of the bucket.
-	 * @param bucketWriter the {@link BucketWriter} used to write part files in the bucket.
-	 * @param <IN> the type of input elements to the sink.
-	 * @param <BucketID> the type of the identifier of the bucket, as returned by the {@link BucketAssigner}
-	 * @param outputFileConfig the part file configuration.
+	 * @param bucketWriter       the {@link BucketWriter} used to write part files in the bucket.
+	 * @param <IN>               the type of input elements to the sink.
+	 * @param <BucketID>         the type of the identifier of the bucket, as returned by the {@link BucketAssigner}
+	 * @param outputFileConfig   the part file configuration.
 	 * @return The new Bucket.
 	 */
 	static <IN, BucketID> Bucket<IN, BucketID> getNew(
-			final int subtaskIndex,
-			final BucketID bucketId,
-			final Path bucketPath,
-			final long createTime,
-			final long initialPartCounter,
-			final BucketWriter<IN, BucketID> bucketWriter,
-			final RollingPolicy<IN, BucketID> rollingPolicy,
-			final OutputFileConfig outputFileConfig) {
+		final int subtaskIndex,
+		final BucketID bucketId,
+		final Path bucketPath,
+		final long createTime,
+		final long initialPartCounter,
+		final BucketWriter<IN, BucketID> bucketWriter,
+		final RollingPolicy<IN, BucketID> rollingPolicy,
+		final OutputFileConfig outputFileConfig) {
 		return new Bucket<>(subtaskIndex, bucketId, bucketPath, createTime, initialPartCounter, bucketWriter, rollingPolicy, outputFileConfig);
 	}
 
 	/**
 	 * Restores a {@code Bucket} from the state included in the provided {@link BucketState}.
-	 * @param subtaskIndex the index of the subtask creating the bucket.
+	 *
+	 * @param subtaskIndex       the index of the subtask creating the bucket.
 	 * @param initialPartCounter the initial counter for the part files of the bucket.
-	 * @param bucketWriter the {@link BucketWriter} used to write part files in the bucket.
-	 * @param bucketState the initial state of the restored bucket.
-	 * @param <IN> the type of input elements to the sink.
-	 * @param <BucketID> the type of the identifier of the bucket, as returned by the {@link BucketAssigner}
-	 * @param outputFileConfig the part file configuration.
+	 * @param bucketWriter       the {@link BucketWriter} used to write part files in the bucket.
+	 * @param bucketState        the initial state of the restored bucket.
+	 * @param <IN>               the type of input elements to the sink.
+	 * @param <BucketID>         the type of the identifier of the bucket, as returned by the {@link BucketAssigner}
+	 * @param outputFileConfig   the part file configuration.
 	 * @return The restored Bucket.
 	 */
 	static <IN, BucketID> Bucket<IN, BucketID> restore(
-			final int subtaskIndex,
-			final long initialPartCounter,
-			final BucketWriter<IN, BucketID> bucketWriter,
-			final RollingPolicy<IN, BucketID> rollingPolicy,
-			final BucketState<BucketID> bucketState,
-			final OutputFileConfig outputFileConfig) throws IOException {
+		final int subtaskIndex,
+		final long initialPartCounter,
+		final BucketWriter<IN, BucketID> bucketWriter,
+		final RollingPolicy<IN, BucketID> rollingPolicy,
+		final BucketState<BucketID> bucketState,
+		final OutputFileConfig outputFileConfig) throws IOException {
 		return new Bucket<>(subtaskIndex, initialPartCounter, bucketWriter, rollingPolicy, bucketState, outputFileConfig);
 	}
 }
